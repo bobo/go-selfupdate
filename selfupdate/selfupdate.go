@@ -16,8 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
-
-	"github.com/kr/binarydist"
 )
 
 const (
@@ -204,26 +202,15 @@ func (u *Updater) Update() error {
 	}
 	defer old.Close()
 
-	bin, err := u.fetchAndVerifyPatch(old)
+	// if patch failed grab the full new bin
+	bin, err := u.fetchAndVerifyFullBin()
 	if err != nil {
 		if err == ErrHashMismatch {
-			log.Println("update: hash mismatch from patched binary")
+			log.Println("update: hash mismatch from full binary")
 		} else {
-			if u.DiffURL != "" {
-				log.Println("update: patching binary,", err)
-			}
+			log.Println("update: fetching full binary,", err)
 		}
-
-		// if patch failed grab the full new bin
-		bin, err = u.fetchAndVerifyFullBin()
-		if err != nil {
-			if err == ErrHashMismatch {
-				log.Println("update: hash mismatch from full binary")
-			} else {
-				log.Println("update: fetching full binary,", err)
-			}
-			return err
-		}
+		return err
 	}
 
 	// close the old binary before installing because on windows
@@ -301,7 +288,8 @@ func fromStream(updateWith io.Reader) (err error, errRecover error) {
 
 		// windows has trouble with removing old binaries, so hide it instead
 		if errRemove != nil {
-			_ = hideFile(oldPath)
+			fmt.Println("update: failed to remove old binary")
+
 		}
 	}
 
@@ -324,28 +312,6 @@ func (u *Updater) fetchInfo() error {
 		return errors.New("bad cmd hash in info")
 	}
 	return nil
-}
-
-func (u *Updater) fetchAndVerifyPatch(old io.Reader) ([]byte, error) {
-	bin, err := u.fetchAndApplyPatch(old)
-	if err != nil {
-		return nil, err
-	}
-	if !verifySha(bin, u.Info.Sha256) {
-		return nil, ErrHashMismatch
-	}
-	return bin, nil
-}
-
-func (u *Updater) fetchAndApplyPatch(old io.Reader) ([]byte, error) {
-	r, err := u.fetch(u.DiffURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(u.CurrentVersion) + "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	var buf bytes.Buffer
-	err = binarydist.Patch(old, &buf, r)
-	return buf.Bytes(), err
 }
 
 func (u *Updater) fetchAndVerifyFullBin() ([]byte, error) {
