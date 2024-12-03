@@ -59,6 +59,7 @@ type Updater struct {
 	RandomizeTime  int       // Time in hours to randomize with CheckTime
 	Requester      Requester // Optional parameter to override existing HTTP request handler
 	Channel        string    // Update channel (e.g., "dev", "beta", "stable")
+	ScheduledHour  int       // Hour of the day to perform updates (0-23), -1 to disable
 	Info           struct {
 		Version string
 		Sha256  []byte
@@ -138,14 +139,34 @@ func (u *Updater) NextUpdate() time.Time {
 	return nextTime
 }
 
-// SetUpdateTime writes the next update time to the state file
 func (u *Updater) SetUpdateTime() bool {
 	path := u.getExecRelativeDir(u.Dir + upcktimePath)
-	wait := time.Duration(u.CheckTime) * time.Hour
-	// Add 1 to random time since max is not included
-	waitrand := time.Duration(rand.Intn(u.RandomizeTime+1)) * time.Hour
 
-	return writeTime(path, time.Now().Add(wait+waitrand))
+	if u.ScheduledHour >= 0 && u.ScheduledHour < 24 {
+		next := u.calculateScheduledTime()
+		return writeTime(path, next)
+	}
+
+	// Fall back to the original random interval behavior
+	next := u.calculateRandomIntervalTime()
+	return writeTime(path, next)
+}
+
+func (u *Updater) calculateScheduledTime() time.Time {
+	now := time.Now()
+	next := time.Date(now.Year(), now.Month(), now.Day(), u.ScheduledHour, 0, 0, 0, time.Local)
+
+	// If the scheduled time has already passed today, schedule for tomorrow
+	if next.Before(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
+}
+
+func (u *Updater) calculateRandomIntervalTime() time.Time {
+	wait := time.Duration(u.CheckTime) * time.Hour
+	waitrand := time.Duration(rand.Intn(u.RandomizeTime+1)) * time.Hour
+	return time.Now().Add(wait + waitrand)
 }
 
 // ClearUpdateState writes current time to state file
