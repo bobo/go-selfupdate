@@ -22,7 +22,7 @@ type current struct {
 
 func generateSha256(path string) []byte {
 	h := sha256.New()
-	b, err := ioutil.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Println(err)
 	}
