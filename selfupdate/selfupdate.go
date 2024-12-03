@@ -58,9 +58,12 @@ type Updater struct {
 	CheckTime      int       // Time in hours before next check
 	RandomizeTime  int       // Time in hours to randomize with CheckTime
 	Requester      Requester // Optional parameter to override existing HTTP request handler
+	Channel        string    // Update channel (e.g., "dev", "beta", "stable")
 	Info           struct {
 		Version string
 		Sha256  []byte
+		Channel string    // The channel this update is for
+		Date    time.Time // When this update was published
 	}
 	OnSuccessfulUpdate func() // Optional function to run after an update has successfully taken place
 }
@@ -296,10 +299,14 @@ func fromStream(updateWith io.Reader) (err error, errRecover error) {
 	return
 }
 
-// fetchInfo fetches the update JSON manifest at u.ApiURL/appname/platform.json
+// fetchInfo fetches the update JSON manifest at u.ApiURL/appname/channel/platform.json
 // and updates u.Info.
 func (u *Updater) fetchInfo() error {
-	r, err := u.fetch(u.ApiURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(plat) + ".json")
+	channel := u.Channel
+	if channel == "" {
+		channel = "stable"
+	}
+	r, err := u.fetch(u.ApiURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(channel) + "/" + url.QueryEscape(plat) + ".json")
 	if err != nil {
 		return err
 	}
@@ -310,6 +317,10 @@ func (u *Updater) fetchInfo() error {
 	}
 	if len(u.Info.Sha256) != sha256.Size {
 		return errors.New("bad cmd hash in info")
+	}
+	// Verify that the update is for the correct channel
+	if u.Info.Channel != channel {
+		return fmt.Errorf("update channel mismatch: expected %s, got %s", channel, u.Info.Channel)
 	}
 	return nil
 }
@@ -327,7 +338,11 @@ func (u *Updater) fetchAndVerifyFullBin() ([]byte, error) {
 }
 
 func (u *Updater) fetchBin() ([]byte, error) {
-	r, err := u.fetch(u.BinURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz")
+	channel := u.Channel
+	if channel == "" {
+		channel = "stable"
+	}
+	r, err := u.fetch(u.BinURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(channel) + "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz")
 	if err != nil {
 		return nil, err
 	}
