@@ -1,0 +1,20 @@
+# Use glob syntax.
+syntax: glob
+
+*.DS_Store
+*.swp
+*.swo
+*.pyc
+*.php~
+*.orig
+*~
+*.db
+*.log
+public/*
+go-selfupdate/go-selfupdate
+example/example-server
+example/hello-updater
+example/public/*
+example/deployment/*
+example/go-selfupdate
+*cktime

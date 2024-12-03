@@ -1,93 +1,122 @@
-# Go Selfupdate
+# go-selfupdate
 
+[![GoDoc](https://godoc.org/github.com/sanbornm/go-selfupdate/selfupdate?status.svg)](https://godoc.org/github.com/sanbornm/go-selfupdate/selfupdate)
+![CI/CD](https://github.com/sanbornm/go-selfupdate/actions/workflows/ci.yml/badge.svg)
 
+Enable your Golang applications to self update.  Inspired by Chrome based on Heroku's [hk](https://github.com/heroku/hk).
 
-## Getting started
+## Features
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+* Tested on Mac, Linux, Arm, and Windows
+* Creates binary diffs with [bsdiff](http://www.daemonology.net/bsdiff/) allowing small incremental updates
+* Falls back to full binary update if diff fails to match SHA
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## QuickStart
 
-## Add your files
+### Install library and update/patch creation utility
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+`go install github.com/sanbornm/go-selfupdate/cmd/go-selfupdate@latest`
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/wingbits/backend/go-libraries/go-selfupdate.git
-git branch -M main
-git push -uf origin main
-```
+### Enable your App to Self Update
 
-## Integrate with your tools
+`go get -u github.com/sanbornm/go-selfupdate/...`
 
-- [ ] [Set up project integrations](https://gitlab.com/wingbits/backend/go-libraries/go-selfupdate/-/settings/integrations)
+	var updater = &selfupdate.Updater{
+		CurrentVersion: version, // the current version of your app used to determine if an update is necessary
+		// these endpoints can be the same if everything is hosted in the same place
+		ApiURL:         "http://updates.yourdomain.com/", // endpoint to get update manifest
+		BinURL:         "http://updates.yourdomain.com/", // endpoint to get full binaries
+		DiffURL:        "http://updates.yourdomain.com/", // endpoint to get binary diff/patches
+		Dir:            "update/",                        // directory relative to your app to store temporary state files related to go-selfupdate
+		CmdName:        "myapp",                          // your app's name (must correspond to app name hosting the updates)
+		// app name allows you to serve updates for multiple apps on the same server/endpoint
+	}
 
-## Collaborate with your team
+    // go look for an update when your app starts up
+	go updater.BackgroundRun()
+	// your app continues to run...
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+### Push Out and Update
 
-## Test and Deploy
+	go-selfupdate path-to-your-app the-version
+    go-selfupdate myapp 1.2
 
-Use the built-in continuous integration in GitLab.
+By default this will create a folder in your project called *public*. You can then rsync or transfer this to your webserver or S3. To change the output directory use `-o` flag.
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+If you are cross compiling you can specify a directory:
 
-***
+    go-selfupdate /tmp/mybinares/ 1.2
 
-# Editing this README
+The directory should contain files with the name, $GOOS-$ARCH. Example:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+    windows-386
+    darwin-amd64
+    linux-arm
 
-## Suggestions for a good README
+If you are using [goxc](https://github.com/laher/goxc) you can output the files with this naming format by specifying this config:
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+    "OutPath": "{{.Dest}}{{.PS}}{{.Version}}{{.PS}}{{.Os}}-{{.Arch}}",
 
-## Name
-Choose a self-explaining name for your project.
+## Update Protocol
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Updates are fetched from an HTTP(s) server. AWS S3 or static hosting can be used. A JSON manifest file is pulled first which points to the wanted version (usually latest) and matching metadata. SHA256 hash is currently the only metadata but new fields may be added here like signatures. `go-selfupdate` isn't aware of any versioning schemes. It doesn't know major/minor versions. It just knows the target version by name and can apply diffs based on current version and version you wish to move to. For example 1.0 to 5.0 or 1.0 to 1.1. You don't even need to use point numbers. You can use hashes, dates, etc for versions.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+	GET yourserver.com/appname/linux-amd64.json
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+	200 ok
+	{
+		"Version": "2",
+		"Sha256": "..." // base64
+	}
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+	then
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+	GET patches.yourserver.com/appname/1.1/1.2/linux-amd64
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+	200 ok
+	[bsdiff data]
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+	or
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+	GET fullbins.yourserver.com/appname/1.0/linux-amd64.gz
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+	200 ok
+	[gzipped executable data]
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+The only required files are `<appname>/<os>-<arch>.json` and `<appname>/<latest>/<os>-<arch>.gz` everything else is optional. If you wanted to you could skip using go-selfupdate CLI tool and generate these two files manually or with another tool.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Config
 
-## License
-For open source projects, say how it is licensed.
+Updater Config options:
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+	type Updater struct {
+		CurrentVersion string    // Currently running version. `dev` is a special version here and will cause the updater to never update.
+		ApiURL         string    // Base URL for API requests (JSON files).
+		CmdName        string    // Command name is appended to the ApiURL like http://apiurl/CmdName/. This represents one binary.
+		BinURL         string    // Base URL for full binary downloads.
+		DiffURL        string    // Base URL for diff downloads.
+		Dir            string    // Directory to store selfupdate state.
+		ForceCheck     bool      // Check for update regardless of cktime timestamp
+		CheckTime      int       // Time in hours before next check
+		RandomizeTime  int       // Time in hours to randomize with CheckTime
+		Requester      Requester // Optional parameter to override existing HTTP request handler
+		Info           struct {
+			Version string
+			Sha256  []byte
+		}
+		OnSuccessfulUpdate func() // Optional function to run after an update has successfully taken place
+	}
+
+### Restart on update
+
+It is common for an app to want to restart to apply the update. `go-selfupdate` gives you a hook to do that but leaves it up to you on how and when to restart as it differs for all apps. If you have a service restart application like Docker or systemd you can simply exit and let the upstream app start/restart your application. Just set the `OnSuccessfulUpdate` hook:
+
+	u.OnSuccessfulUpdate = func() { os.Exit(0) }
+
+Or maybe you have a fancy graceful restart library/func:
+
+	u.OnSuccessfulUpdate = func() { gracefullyRestartMyApp() }
+
+## State
+
+go-selfupdate will keep a Go time.Time formatted timestamp in a file named `cktime` in folder specified by `Updater.Dir`. This can be useful for debugging to see when the next update can be applied or allow other applications to manipulate it.
