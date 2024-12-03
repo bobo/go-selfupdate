@@ -2,8 +2,6 @@ package main
 
 import (
 	"log"
-
-	"github.com/sanbornm/go-selfupdate/selfupdate"
 )
 
 // The purpose of this app is to provide a simple example that just prints
