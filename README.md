@@ -1,5 +1,11 @@
 # go-selfupdate
 
+## Goal with this fork
+
+This fork is to add a channel parameter to the update process. This to allow for a slow rollout of updates.
+It also removes the binary diffs and only uses full binaries. To minimise our dependencies and complexity.
+
+
 [![GoDoc](https://godoc.org/github.com/sanbornm/go-selfupdate/selfupdate?status.svg)](https://godoc.org/github.com/sanbornm/go-selfupdate/selfupdate)
 ![CI/CD](https://github.com/sanbornm/go-selfupdate/actions/workflows/ci.yml/badge.svg)
 
@@ -8,7 +14,6 @@ Enable your Golang applications to self update.  Inspired by Chrome based on Her
 ## Features
 
 * Tested on Mac, Linux, Arm, and Windows
-* Creates binary diffs with [bsdiff](http://www.daemonology.net/bsdiff/) allowing small incremental updates
 * Falls back to full binary update if diff fails to match SHA
 
 ## QuickStart
