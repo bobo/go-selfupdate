@@ -16,8 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
-
-	"github.com/kr/binarydist"
 )
 
 const (
@@ -60,9 +58,13 @@ type Updater struct {
 	CheckTime      int       // Time in hours before next check
 	RandomizeTime  int       // Time in hours to randomize with CheckTime
 	Requester      Requester // Optional parameter to override existing HTTP request handler
+	Channel        string    // Update channel (e.g., "dev", "beta", "stable")
+	ScheduledHour  int       // Hour of the day to perform updates (0-23), -1 to disable
 	Info           struct {
 		Version string
 		Sha256  []byte
+		Channel string    // The channel this update is for
+		Date    time.Time // When this update was published
 	}
 	OnSuccessfulUpdate func() // Optional function to run after an update has successfully taken place
 }
@@ -97,6 +99,7 @@ func canUpdate() (err error) {
 
 // BackgroundRun starts the update check and apply cycle.
 func (u *Updater) BackgroundRun() error {
+
 	if err := os.MkdirAll(u.getExecRelativeDir(u.Dir), 0755); err != nil {
 		// fail
 		return err
@@ -123,9 +126,11 @@ func (u *Updater) BackgroundRun() error {
 // WantUpdate will return true.
 func (u *Updater) WantUpdate() bool {
 	if u.CurrentVersion == "dev" || (!u.ForceCheck && u.NextUpdate().After(time.Now())) {
+		log.Println("(selfupdate) Not updating because version is dev or next update is after now")
 		return false
 	}
 
+	log.Println("(selfupdate) Updating because version is not dev and next update is before now")
 	return true
 }
 
@@ -137,14 +142,34 @@ func (u *Updater) NextUpdate() time.Time {
 	return nextTime
 }
 
-// SetUpdateTime writes the next update time to the state file
 func (u *Updater) SetUpdateTime() bool {
 	path := u.getExecRelativeDir(u.Dir + upcktimePath)
-	wait := time.Duration(u.CheckTime) * time.Hour
-	// Add 1 to random time since max is not included
-	waitrand := time.Duration(rand.Intn(u.RandomizeTime+1)) * time.Hour
 
-	return writeTime(path, time.Now().Add(wait+waitrand))
+	if u.ScheduledHour >= 0 && u.ScheduledHour < 24 {
+		next := u.calculateScheduledTime()
+		return writeTime(path, next)
+	}
+
+	// Fall back to the original random interval behavior
+	next := u.calculateRandomIntervalTime()
+	return writeTime(path, next)
+}
+
+func (u *Updater) calculateScheduledTime() time.Time {
+	now := time.Now()
+	next := time.Date(now.Year(), now.Month(), now.Day(), u.ScheduledHour, 0, 0, 0, time.Local)
+
+	// If the scheduled time has already passed today, schedule for tomorrow
+	if next.Before(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
+}
+
+func (u *Updater) calculateRandomIntervalTime() time.Time {
+	wait := time.Duration(u.CheckTime) * time.Hour
+	waitrand := time.Duration(rand.Intn(u.RandomizeTime+1)) * time.Hour
+	return time.Now().Add(wait + waitrand)
 }
 
 // ClearUpdateState writes current time to state file
@@ -204,26 +229,15 @@ func (u *Updater) Update() error {
 	}
 	defer old.Close()
 
-	bin, err := u.fetchAndVerifyPatch(old)
+	// if patch failed grab the full new bin
+	bin, err := u.fetchAndVerifyFullBin()
 	if err != nil {
 		if err == ErrHashMismatch {
-			log.Println("update: hash mismatch from patched binary")
+			log.Println("update: hash mismatch from full binary")
 		} else {
-			if u.DiffURL != "" {
-				log.Println("update: patching binary,", err)
-			}
+			log.Println("update: fetching full binary,", err)
 		}
-
-		// if patch failed grab the full new bin
-		bin, err = u.fetchAndVerifyFullBin()
-		if err != nil {
-			if err == ErrHashMismatch {
-				log.Println("update: hash mismatch from full binary")
-			} else {
-				log.Println("update: fetching full binary,", err)
-			}
-			return err
-		}
+		return err
 	}
 
 	// close the old binary before installing because on windows
@@ -301,17 +315,30 @@ func fromStream(updateWith io.Reader) (err error, errRecover error) {
 
 		// windows has trouble with removing old binaries, so hide it instead
 		if errRemove != nil {
-			_ = hideFile(oldPath)
+			fmt.Println("update: failed to remove old binary")
+
 		}
 	}
 
 	return
 }
 
-// fetchInfo fetches the update JSON manifest at u.ApiURL/appname/platform.json
+// fetchInfo fetches the update JSON manifest at u.ApiURL/appname/channel/platform.json
 // and updates u.Info.
 func (u *Updater) fetchInfo() error {
-	r, err := u.fetch(u.ApiURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(plat) + ".json")
+	channel := u.Channel
+	if channel == "" {
+		channel = "stable"
+	}
+
+	// Build URL path - omit channel segment if it's "stable"
+	urlPath := url.QueryEscape(u.CmdName)
+	if channel != "stable" {
+		urlPath += "/" + url.QueryEscape(channel)
+	}
+	urlPath += "/" + url.QueryEscape(plat) + ".json"
+
+	r, err := u.fetch(u.ApiURL + urlPath)
 	if err != nil {
 		return err
 	}
@@ -323,29 +350,11 @@ func (u *Updater) fetchInfo() error {
 	if len(u.Info.Sha256) != sha256.Size {
 		return errors.New("bad cmd hash in info")
 	}
+	// Verify that the update is for the correct channel
+	if u.Info.Channel != channel {
+		return fmt.Errorf("update channel mismatch: expected %s, got %s", channel, u.Info.Channel)
+	}
 	return nil
-}
-
-func (u *Updater) fetchAndVerifyPatch(old io.Reader) ([]byte, error) {
-	bin, err := u.fetchAndApplyPatch(old)
-	if err != nil {
-		return nil, err
-	}
-	if !verifySha(bin, u.Info.Sha256) {
-		return nil, ErrHashMismatch
-	}
-	return bin, nil
-}
-
-func (u *Updater) fetchAndApplyPatch(old io.Reader) ([]byte, error) {
-	r, err := u.fetch(u.DiffURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(u.CurrentVersion) + "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	var buf bytes.Buffer
-	err = binarydist.Patch(old, &buf, r)
-	return buf.Bytes(), err
 }
 
 func (u *Updater) fetchAndVerifyFullBin() ([]byte, error) {
@@ -361,7 +370,19 @@ func (u *Updater) fetchAndVerifyFullBin() ([]byte, error) {
 }
 
 func (u *Updater) fetchBin() ([]byte, error) {
-	r, err := u.fetch(u.BinURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz")
+	channel := u.Channel
+	if channel == "" {
+		channel = "stable"
+	}
+
+	// Build URL path - omit channel segment if it's "stable"
+	urlPath := url.QueryEscape(u.CmdName)
+	if channel != "stable" {
+		urlPath += "/" + url.QueryEscape(channel)
+	}
+	urlPath += "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz"
+
+	r, err := u.fetch(u.BinURL + urlPath)
 	if err != nil {
 		return nil, err
 	}

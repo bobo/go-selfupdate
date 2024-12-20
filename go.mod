@@ -1,5 +1,3 @@
-module github.com/sanbornm/go-selfupdate
+module gitlab.com/wingbits/backend/go-libraries/go-selfupdate
 
-go 1.15
-
-require github.com/kr/binarydist v0.1.0
+go 1.23
