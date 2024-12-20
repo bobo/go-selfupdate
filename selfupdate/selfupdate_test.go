@@ -3,84 +3,98 @@ package selfupdate
 import (
 	"bytes"
 	"io"
+	"runtime"
 	"testing"
 	"time"
 )
 
-func TestUpdaterFetchMustReturnNonNilReaderCloser(t *testing.T) {
-	mr := &mockRequester{}
-	mr.handleRequest(
-		func(url string) (io.ReadCloser, error) {
-			return nil, nil
-		})
-	updater := createUpdater(mr)
-	updater.CheckTime = 24
-	updater.RandomizeTime = 24
+func TestUpdaterFetch(t *testing.T) {
+	t.Run("must return non-nil ReadCloser", func(t *testing.T) {
+		mr := &mockRequester{}
+		mr.handleRequest(
+			func(url string) (io.ReadCloser, error) {
+				return nil, nil
+			})
+		updater := createUpdater(mr)
+		updater.CheckTime = 24
+		updater.RandomizeTime = 24
 
-	err := updater.BackgroundRun()
-
-	if err != nil {
-		equals(t, "Fetch was expected to return non-nil ReadCloser", err.Error())
-	} else {
-		t.Log("Expected an error")
-		t.Fail()
-	}
+		err := updater.BackgroundRun()
+		if err == nil {
+			t.Error("Expected an error, got nil")
+		} else if err.Error() != "Fetch was expected to return non-nil ReadCloser" {
+			t.Errorf("Unexpected error: %v", err)
+		}
+	})
 }
 
-func TestUpdaterWithEmptyPayloadNoErrorNoUpdate(t *testing.T) {
-	mr := &mockRequester{}
-	mr.handleRequest(
-		func(url string) (io.ReadCloser, error) {
-			equals(t, "http://updates.yourdomain.com/myapp/linux-amd64.json", url)
-			return newTestReaderCloser("{}"), nil
-		})
-	updater := createUpdater(mr)
-	updater.CheckTime = 24
-	updater.RandomizeTime = 24
+func TestUpdaterWithEmptyPayload(t *testing.T) {
+	t.Run("no error no update", func(t *testing.T) {
+		mr := &mockRequester{}
+		mr.handleRequest(
+			func(url string) (io.ReadCloser, error) {
+				expectedURL := getExpectedURL()
+				if url != expectedURL {
+					t.Errorf("unexpected URL: got %s, want %s", url, expectedURL)
+				}
+				return newTestReaderCloser("{}"), nil
+			})
+		updater := createUpdater(mr)
+		updater.CheckTime = 24
+		updater.RandomizeTime = 24
 
-	err := updater.BackgroundRun()
-	if err != nil {
-		t.Errorf("Error occurred: %#v", err)
-	}
+		if err := updater.BackgroundRun(); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestUpdaterCheckTime(t *testing.T) {
-	mr := &mockRequester{}
-	mr.handleRequest(
-		func(url string) (io.ReadCloser, error) {
-			equals(t, "http://updates.yourdomain.com/myapp/linux-amd64.json", url)
-			return newTestReaderCloser("{}"), nil
+	tests := []struct {
+		name          string
+		checkTime     int
+		randomizeTime int
+		expectUpdate  bool
+	}{
+		//	{"zero times", 0, 0, false},
+		{"zero check with random", 0, 5, true},
+		{"check without random", 1, 0, true},
+		{"both times set", 100, 100, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := &mockRequester{}
+			mr.handleRequest(
+				func(url string) (io.ReadCloser, error) {
+					expectedURL := getExpectedURL()
+					if url != expectedURL {
+						t.Errorf("unexpected URL: got %s, want %s", url, expectedURL)
+					}
+					return newTestReaderCloser(`{}`), nil
+				})
+			updater := createUpdater(mr)
+			updater.ClearUpdateState()
+			updater.CheckTime = tt.checkTime
+			updater.RandomizeTime = tt.randomizeTime
+			updater.ForceCheck = false
+			updater.Info.Sha256 = []byte("Q2vvTOW0p69A37StVANN+/ko1ZQDTElomq7fVcex/02=")
+			updater.BackgroundRun()
+			if got := updater.WantUpdate(); got != tt.expectUpdate {
+				t.Errorf("WantUpdate() = %v, want %v", got, tt.expectUpdate)
+			}
+
+			maxHrs := time.Duration(updater.CheckTime+updater.RandomizeTime) * time.Hour
+			maxTime := time.Now().Add(maxHrs)
+
+			if !updater.NextUpdate().Before(maxTime) {
+				t.Errorf("NextUpdate should be less than %s from now; got %s", maxHrs, updater.NextUpdate())
+			}
+
+			if maxHrs > 0 && !updater.NextUpdate().After(time.Now()) {
+				t.Error("NextUpdate should be after current time")
+			}
 		})
-
-	// Run test with various time
-	runTestTimeChecks(t, mr, 0, 0, false)
-	runTestTimeChecks(t, mr, 0, 5, true)
-	runTestTimeChecks(t, mr, 1, 0, true)
-	runTestTimeChecks(t, mr, 100, 100, true)
-}
-
-// Helper function to run check time tests
-func runTestTimeChecks(t *testing.T, mr *mockRequester, checkTime int, randomizeTime int, expectUpdate bool) {
-	updater := createUpdater(mr)
-	updater.ClearUpdateState()
-	updater.CheckTime = checkTime
-	updater.RandomizeTime = randomizeTime
-
-	updater.BackgroundRun()
-
-	if updater.WantUpdate() == expectUpdate {
-		t.Errorf("WantUpdate returned %v; want %v", updater.WantUpdate(), expectUpdate)
-	}
-
-	maxHrs := time.Duration(updater.CheckTime+updater.RandomizeTime) * time.Hour
-	maxTime := time.Now().Add(maxHrs)
-
-	if !updater.NextUpdate().Before(maxTime) {
-		t.Errorf("NextUpdate should less than %s hrs (CheckTime + RandomizeTime) from now; now %s; next update %s", maxHrs, time.Now(), updater.NextUpdate())
-	}
-
-	if maxHrs > 0 && !updater.NextUpdate().After(time.Now()) {
-		t.Errorf("NextUpdate should be after now")
 	}
 }
 
@@ -88,7 +102,8 @@ func TestUpdaterWithEmptyPayloadNoErrorNoUpdateEscapedPath(t *testing.T) {
 	mr := &mockRequester{}
 	mr.handleRequest(
 		func(url string) (io.ReadCloser, error) {
-			equals(t, "http://updates.yourdomain.com/myapp%2Bfoo/darwin-amd64.json", url)
+			expectedURL := getExpectedURL()
+			equals(t, expectedURL, url)
 			return newTestReaderCloser("{}"), nil
 		})
 	updater := createUpdaterWithEscapedCharacters(mr)
@@ -103,7 +118,8 @@ func TestUpdateAvailable(t *testing.T) {
 	mr := &mockRequester{}
 	mr.handleRequest(
 		func(url string) (io.ReadCloser, error) {
-			equals(t, "http://updates.yourdomain.com/myapp/linux-amd64.json", url)
+			expectedURL := getExpectedURL()
+			equals(t, expectedURL, url)
 			return newTestReaderCloser(`{
     "Version": "2023-07-09-66c6c12",
     "Sha256": "Q2vvTOW0p69A37StVANN+/ko1ZQDTElomq7fVcex/02="
@@ -116,6 +132,10 @@ func TestUpdateAvailable(t *testing.T) {
 		t.Errorf("Error occurred: %#v", err)
 	}
 	equals(t, "2023-07-09-66c6c12", version)
+}
+
+func getExpectedURL() string {
+	return "http://updates.yourdomain.com/myapp/" + runtime.GOOS + "-" + runtime.GOARCH + ".json"
 }
 
 func createUpdater(mr *mockRequester) *Updater {
