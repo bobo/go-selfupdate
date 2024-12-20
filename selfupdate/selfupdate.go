@@ -99,6 +99,7 @@ func canUpdate() (err error) {
 
 // BackgroundRun starts the update check and apply cycle.
 func (u *Updater) BackgroundRun() error {
+
 	if err := os.MkdirAll(u.getExecRelativeDir(u.Dir), 0755); err != nil {
 		// fail
 		return err
@@ -125,9 +126,11 @@ func (u *Updater) BackgroundRun() error {
 // WantUpdate will return true.
 func (u *Updater) WantUpdate() bool {
 	if u.CurrentVersion == "dev" || (!u.ForceCheck && u.NextUpdate().After(time.Now())) {
+		log.Println("(selfupdate) Not updating because version is dev or next update is after now")
 		return false
 	}
 
+	log.Println("(selfupdate) Updating because version is not dev and next update is before now")
 	return true
 }
 
@@ -327,7 +330,15 @@ func (u *Updater) fetchInfo() error {
 	if channel == "" {
 		channel = "stable"
 	}
-	r, err := u.fetch(u.ApiURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(channel) + "/" + url.QueryEscape(plat) + ".json")
+
+	// Build URL path - omit channel segment if it's "stable"
+	urlPath := url.QueryEscape(u.CmdName)
+	if channel != "stable" {
+		urlPath += "/" + url.QueryEscape(channel)
+	}
+	urlPath += "/" + url.QueryEscape(plat) + ".json"
+
+	r, err := u.fetch(u.ApiURL + urlPath)
 	if err != nil {
 		return err
 	}
@@ -363,7 +374,15 @@ func (u *Updater) fetchBin() ([]byte, error) {
 	if channel == "" {
 		channel = "stable"
 	}
-	r, err := u.fetch(u.BinURL + url.QueryEscape(u.CmdName) + "/" + url.QueryEscape(channel) + "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz")
+
+	// Build URL path - omit channel segment if it's "stable"
+	urlPath := url.QueryEscape(u.CmdName)
+	if channel != "stable" {
+		urlPath += "/" + url.QueryEscape(channel)
+	}
+	urlPath += "/" + url.QueryEscape(u.Info.Version) + "/" + url.QueryEscape(plat) + ".gz"
+
+	r, err := u.fetch(u.BinURL + urlPath)
 	if err != nil {
 		return nil, err
 	}

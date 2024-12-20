@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 var version, genDir string
@@ -18,6 +18,8 @@ var version, genDir string
 type current struct {
 	Version string
 	Sha256  []byte
+	Channel string
+	Date    time.Time
 }
 
 func generateSha256(path string) []byte {
@@ -32,8 +34,8 @@ func generateSha256(path string) []byte {
 	//return base64.URLEncoding.EncodeToString(sum)
 }
 
-func createUpdate(path string, platform string) {
-	c := current{Version: version, Sha256: generateSha256(path)}
+func createUpdate(path string, platform string, channel string) {
+	c := current{Version: version, Sha256: generateSha256(path), Channel: channel, Date: time.Now()}
 
 	b, err := json.MarshalIndent(c, "", "    ")
 	if err != nil {
@@ -97,6 +99,7 @@ func main() {
 	platform := *platformFlag
 	appPath := flag.Arg(0)
 	version = flag.Arg(1)
+	channel := flag.Arg(2)
 	genDir = *outputDirFlag
 
 	createBuildDir()
@@ -108,14 +111,14 @@ func main() {
 	}
 
 	if fi.IsDir() {
-		files, err := ioutil.ReadDir(appPath)
+		files, err := os.ReadDir(appPath)
 		if err == nil {
 			for _, file := range files {
-				createUpdate(filepath.Join(appPath, file.Name()), file.Name())
+				createUpdate(filepath.Join(appPath, file.Name()), file.Name(), channel)
 			}
 			os.Exit(0)
 		}
 	}
 
-	createUpdate(appPath, platform)
+	createUpdate(appPath, platform, channel)
 }
