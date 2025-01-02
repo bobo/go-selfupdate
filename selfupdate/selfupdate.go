@@ -139,8 +139,15 @@ func (s *IntervalScheduler) NextUpdate() time.Time {
 	return readTime(s.timeFile)
 }
 
+var randSource = func() int64 {
+	return time.Now().UnixNano()
+}
+
 func randInt(min, max int) int {
-	return min + time.Now().Nanosecond()%(max-min+1)
+	if min == max {
+		return min
+	}
+	return min + int(randSource()%int64(max-min+1))
 }
 
 // Updater handles the self-update process

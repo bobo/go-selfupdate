@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// Test helpers
+func setTestRandSource(t *testing.T, value int64) func() {
+	original := randSource
+	randSource = func() int64 { return value }
+	return func() {
+		randSource = original
+	}
+}
+
 func TestUpdaterSchedulers(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -226,39 +235,50 @@ func TestIntervalScheduler(t *testing.T) {
 
 	t.Run("should schedule with exact interval when no randomization", func(t *testing.T) {
 		s := NewIntervalScheduler(24, 0, tempFile)
-		now := time.Now()
+		start := time.Now()
 		s.SetNextUpdate()
 		next := s.NextUpdate()
 
-		expectedTime := now.Add(24 * time.Hour)
+		expectedTime := start.Add(24 * time.Hour)
 		diff := next.Sub(expectedTime)
-		if diff < -time.Minute || diff > time.Minute {
+		if diff < -time.Second || diff > time.Second {
 			t.Errorf("Next update should be ~24 hours from now, got diff of %v", diff)
 		}
 	})
 
 	t.Run("should schedule within randomization window", func(t *testing.T) {
+		// Set deterministic random source
+		restore := setTestRandSource(t, 3) // Use 3 as a fixed random value
+		defer restore()
+
 		checkTime := 24
 		randomizeTime := 6
 		s := NewIntervalScheduler(checkTime, randomizeTime, tempFile)
-		now := time.Now()
+
+		start := time.Now()
 		s.SetNextUpdate()
 		next := s.NextUpdate()
 
-		minExpected := now.Add(time.Duration(checkTime) * time.Hour)
-		maxExpected := now.Add(time.Duration(checkTime+randomizeTime) * time.Hour)
-
-		if next.Before(minExpected) {
-			t.Errorf("Next update too early, got %v, want after %v", next, minExpected)
-		}
-		if next.After(maxExpected) {
-			t.Errorf("Next update too late, got %v, want before %v", next, maxExpected)
+		// With our fixed random value of 3, we expect the next update to be at checkTime + 3 hours
+		expectedTime := start.Add(time.Duration(checkTime+3) * time.Hour)
+		diff := next.Sub(expectedTime)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Next update should be at expected time, got diff of %v", diff)
 		}
 	})
 
 	t.Run("should not update before scheduled time", func(t *testing.T) {
+		restore := setTestRandSource(t, 0) // Use 0 to get predictable timing
+		defer restore()
+
 		s := NewIntervalScheduler(24, 0, tempFile)
+		start := time.Now()
 		s.SetNextUpdate()
+
+		if !s.NextUpdate().After(start) {
+			t.Error("Next update should be after start time")
+		}
+
 		if s.ShouldUpdate("1.0", false) {
 			t.Error("Should not update before scheduled time")
 		}
