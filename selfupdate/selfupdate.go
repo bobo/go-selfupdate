@@ -1,13 +1,27 @@
 package selfupdate
 
 import (
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
+)
+
+// Common errors
+var (
+	ErrHashMismatch    = errors.New("new file hash mismatch after patch")
+	ErrInvalidHash     = errors.New("invalid hash in update info")
+	ErrChannelMismatch = errors.New("update channel mismatch")
+	ErrNoRequester     = errors.New("no HTTP requester configured")
 )
 
 const (
@@ -44,7 +58,7 @@ type Updater struct {
 
 // BackgroundRun starts the update check and apply cycle
 func (u *Updater) BackgroundRun(ctx context.Context) error {
-	if err := os.MkdirAll(u.getExecRelativeDir(u.Dir), 0755); err != nil {
+	if err := os.MkdirAll(getExecRelativeDir(u.Dir), 0755); err != nil {
 		return fmt.Errorf("failed to create update directory: %w", err)
 	}
 
@@ -158,80 +172,110 @@ func (u *Updater) applyUpdate(execPath string, newBin []byte) error {
 	return nil
 }
 
-// Helper functions remain mostly unchanged but with improved error handling...
-
-func (u *Updater) getExecRelativeDir(dir string) string {
-	filename, _ := os.Executable()
-	return filepath.Join(filepath.Dir(filename), dir)
-}
-
-func canUpdate() error {
-	path, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
-	fileDir := filepath.Dir(path)
-	fileName := filepath.Base(path)
-
-	// Try to create a test file to verify write permissions
-	newPath := filepath.Join(fileDir, fmt.Sprintf(".%s.new", fileName))
-	fp, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
-		return err
-	}
-	fp.Close()
-
-	return os.Remove(newPath)
-}
+// Helper functions
 
 func (u *Updater) setNextUpdateTime() {
 	if u.ScheduledHour != nil {
 		next := u.calculateScheduledTime()
-		writeTime(u.getExecRelativeDir(u.Dir+timeFile), next)
+		writeTime(getExecRelativeDir(u.Dir+timeFile), next)
 		return
 	}
 
 	if u.CheckTime > 0 {
 		next := time.Now().Add(time.Duration(u.CheckTime) * time.Hour)
-		writeTime(u.getExecRelativeDir(u.Dir+timeFile), next)
+		writeTime(getExecRelativeDir(u.Dir+timeFile), next)
 	}
 }
 
 func (u *Updater) NextUpdate() time.Time {
-	path := u.getExecRelativeDir(u.Dir + timeFile)
+	path := getExecRelativeDir(u.Dir + timeFile)
 	return readTime(path)
 }
 
 func (u *Updater) fetchInfo(ctx context.Context) error {
-	// Placeholder for now - will implement in next part
+	channel := u.Channel
+	if channel == "" {
+		channel = stableChannel
+	}
+
+	// Build URL path
+	urlPath := url.PathEscape(u.CmdName)
+	if channel != stableChannel {
+		urlPath = filepath.Join(urlPath, url.PathEscape(channel))
+	}
+	urlPath = filepath.Join(urlPath, url.PathEscape(platform)) + ".json"
+
+	if u.Requester == nil {
+		return ErrNoRequester
+	}
+
+	r, err := u.Requester.Fetch(u.ApiURL + urlPath)
+	if err != nil {
+		return fmt.Errorf("failed to fetch update info: %w", err)
+	}
+	defer r.Close()
+
+	var info UpdateInfo
+	if err := json.NewDecoder(r).Decode(&info); err != nil {
+		return fmt.Errorf("failed to decode update info: %w", err)
+	}
+
+	if len(info.Sha256) != sha256.Size {
+		return ErrInvalidHash
+	}
+
+	if info.Channel != channel {
+		return fmt.Errorf("%w: expected %s, got %s",
+			ErrChannelMismatch, channel, info.Channel)
+	}
+
+	u.Info = info
 	return nil
 }
 
 func (u *Updater) fetchAndVerifyFullBin(ctx context.Context) ([]byte, error) {
-	// Placeholder for now - will implement in next part
-	return nil, nil
-}
-
-// Helper functions
-
-func readTime(path string) time.Time {
-	p, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return time.Time{}
+	channel := u.Channel
+	if channel == "" {
+		channel = stableChannel
 	}
+
+	// Build URL path
+	urlPath := url.PathEscape(u.CmdName)
+	if channel != stableChannel {
+		urlPath = filepath.Join(urlPath, url.PathEscape(channel))
+	}
+	urlPath = filepath.Join(urlPath,
+		url.PathEscape(u.Info.Version),
+		url.PathEscape(platform)) + ".gz"
+
+	if u.Requester == nil {
+		return nil, ErrNoRequester
+	}
+
+	r, err := u.Requester.Fetch(u.BinURL + urlPath)
 	if err != nil {
-		return time.Now().Add(1000 * time.Hour)
+		return nil, fmt.Errorf("failed to fetch binary: %w", err)
 	}
-	t, err := time.Parse(time.RFC3339, string(p))
-	if err != nil {
-		return time.Now().Add(1000 * time.Hour)
-	}
-	return t
-}
+	defer r.Close()
 
-func writeTime(path string, t time.Time) bool {
-	return os.WriteFile(path, []byte(t.Format(time.RFC3339)), 0644) == nil
+	// Decompress gzip
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	// Read and verify binary
+	bin, err := io.ReadAll(gz)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read binary: %w", err)
+	}
+
+	if !verifyHash(bin, u.Info.Sha256) {
+		return nil, ErrHashMismatch
+	}
+
+	return bin, nil
 }
 
 func (u *Updater) calculateScheduledTime() time.Time {
