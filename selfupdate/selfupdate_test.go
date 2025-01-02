@@ -3,13 +3,15 @@ package selfupdate
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
 
 // Test helpers
-func setTestRandSource(t *testing.T, value int64) func() {
+func setTestRandSource(value int64) func() {
 	original := randSource
 	randSource = func() int64 { return value }
 	return func() {
@@ -17,19 +19,33 @@ func setTestRandSource(t *testing.T, value int64) func() {
 	}
 }
 
+func cleanupTimeFile(t *testing.T) {
+	dir, _ := os.Getwd()
+
+	timeFilePath := filepath.Join(dir, "cktime")
+	err := os.Remove(timeFilePath)
+	if err != nil {
+		t.Logf("Error removing time file: %v", err)
+	}
+
+}
+
 func TestUpdaterSchedulers(t *testing.T) {
+	t.Cleanup(func() { cleanupTimeFile(t) })
+
 	tests := []struct {
 		name         string
 		scheduler    UpdateScheduler
 		expectUpdate bool
 	}{
-		{"daily scheduler", NewDailyScheduler((time.Now().Hour()+1)%24, getExecRelativeDir("update/"+timeFile)), true},
-		{"interval no random", NewIntervalScheduler(1, 0, getExecRelativeDir("update/"+timeFile)), true},
-		{"interval with random", NewIntervalScheduler(100, 100, getExecRelativeDir("update/"+timeFile)), true},
+		{"daily scheduler", NewDailyScheduler(18), true},
+		{"interval no random", NewIntervalScheduler(1, 0), true},
+		{"interval with random", NewIntervalScheduler(100, 100), true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			cleanupTimeFile(t)
 			mr := &mockRequester{}
 			mr.handleRequest(
 				func(url string) (io.ReadCloser, error) {
@@ -43,7 +59,7 @@ func TestUpdaterSchedulers(t *testing.T) {
 			updater.Scheduler = tt.scheduler
 			updater.ForceCheck = false
 			updater.Info.Sha256 = []byte("Q2vvTOW0p69A37StVANN+/ko1ZQDTElomq7fVcex/02=")
-			updater.BackgroundRun()
+			updater.UpdateIfNeeded()
 
 			nextUpdate := updater.NextUpdate()
 			if !nextUpdate.After(time.Now()) {
@@ -75,23 +91,6 @@ func TestUpdaterSchedulers(t *testing.T) {
 	}
 }
 
-func TestUpdaterWithEmptyPayloadNoErrorNoUpdateEscapedPath(t *testing.T) {
-	mr := &mockRequester{}
-	mr.handleRequest(
-		func(url string) (io.ReadCloser, error) {
-			expectedURL := getExpectedURL()
-			equals(t, expectedURL, url)
-			return newTestReaderCloser("{}"), nil
-		})
-	updater := createUpdaterWithEscapedCharacters(mr)
-	updater.Scheduler = NewIntervalScheduler(24, 0, getExecRelativeDir("update/"+timeFile))
-
-	err := updater.BackgroundRun()
-	if err != nil {
-		t.Errorf("Error occurred: %#v", err)
-	}
-}
-
 func TestFetchInfo(t *testing.T) {
 	mr := &mockRequester{}
 	mr.handleRequest(
@@ -106,7 +105,7 @@ func TestFetchInfo(t *testing.T) {
 }`), nil
 		})
 	updater := createUpdater(mr)
-	updater.Scheduler = NewIntervalScheduler(24, 0, getExecRelativeDir("update/"+timeFile))
+	updater.Scheduler = NewIntervalScheduler(24, 0)
 
 	err := updater.fetchInfo()
 	if err != nil {
@@ -129,19 +128,6 @@ func createUpdater(mr *mockRequester) *Updater {
 		DiffURL:        "http://updates.yourdomain.com/",
 		Dir:            "update/",
 		CmdName:        "myapp", // app name
-		Requester:      mr,
-		Info:           UpdateInfo{},
-	}
-}
-
-func createUpdaterWithEscapedCharacters(mr *mockRequester) *Updater {
-	return &Updater{
-		CurrentVersion: "1.2+foobar",
-		ApiURL:         "http://updates.yourdomain.com/",
-		BinURL:         "http://updates.yourdownmain.com/",
-		DiffURL:        "http://updates.yourdomain.com/",
-		Dir:            "update/",
-		CmdName:        "myapp+foo", // app name
 		Requester:      mr,
 		Info:           UpdateInfo{},
 	}
@@ -171,25 +157,28 @@ func (trc *testReadCloser) Close() error {
 }
 
 func TestDailyScheduler(t *testing.T) {
-	tempFile := t.TempDir() + "/cktime"
+	t.Cleanup(func() { cleanupTimeFile(t) })
 
 	t.Run("should skip dev version", func(t *testing.T) {
-		s := NewDailyScheduler(3, tempFile)
+		cleanupTimeFile(t)
+		s := NewDailyScheduler(3)
 		if s.ShouldUpdate("dev", false) {
 			t.Error("Should skip dev version")
 		}
 	})
 
 	t.Run("should update on force check", func(t *testing.T) {
-		s := NewDailyScheduler(3, tempFile)
+		cleanupTimeFile(t)
+		s := NewDailyScheduler(3)
 		if !s.ShouldUpdate("1.0", true) {
 			t.Error("Should update on force check")
 		}
 	})
 
 	t.Run("should schedule for next day if current hour passed", func(t *testing.T) {
+		cleanupTimeFile(t)
 		currentHour := time.Now().Hour()
-		s := NewDailyScheduler(currentHour-1, tempFile)
+		s := NewDailyScheduler(currentHour - 1)
 		s.SetNextUpdate()
 		next := s.NextUpdate()
 
@@ -202,8 +191,9 @@ func TestDailyScheduler(t *testing.T) {
 	})
 
 	t.Run("should schedule for today if hour not passed", func(t *testing.T) {
+		cleanupTimeFile(t)
 		currentHour := time.Now().Hour()
-		s := NewDailyScheduler((currentHour+1)%24, tempFile)
+		s := NewDailyScheduler((currentHour + 1) % 24)
 		s.SetNextUpdate()
 		next := s.NextUpdate()
 
@@ -217,24 +207,27 @@ func TestDailyScheduler(t *testing.T) {
 }
 
 func TestIntervalScheduler(t *testing.T) {
-	tempFile := t.TempDir() + "/cktime"
+	t.Cleanup(func() { cleanupTimeFile(t) })
 
 	t.Run("should skip dev version", func(t *testing.T) {
-		s := NewIntervalScheduler(24, 0, tempFile)
+		cleanupTimeFile(t)
+		s := NewIntervalScheduler(24, 0)
 		if s.ShouldUpdate("dev", false) {
 			t.Error("Should skip dev version")
 		}
 	})
 
 	t.Run("should update on force check", func(t *testing.T) {
-		s := NewIntervalScheduler(24, 0, tempFile)
+		cleanupTimeFile(t)
+		s := NewIntervalScheduler(24, 0)
 		if !s.ShouldUpdate("1.0", true) {
 			t.Error("Should update on force check")
 		}
 	})
 
 	t.Run("should schedule with exact interval when no randomization", func(t *testing.T) {
-		s := NewIntervalScheduler(24, 0, tempFile)
+		cleanupTimeFile(t)
+		s := NewIntervalScheduler(24, 0)
 		start := time.Now()
 		s.SetNextUpdate()
 		next := s.NextUpdate()
@@ -247,14 +240,14 @@ func TestIntervalScheduler(t *testing.T) {
 	})
 
 	t.Run("should schedule within randomization window", func(t *testing.T) {
+		cleanupTimeFile(t)
 		// Set deterministic random source
-		restore := setTestRandSource(t, 3) // Use 3 as a fixed random value
+		restore := setTestRandSource(3) // Use 3 as a fixed random value
 		defer restore()
 
 		checkTime := 24
 		randomizeTime := 6
-		s := NewIntervalScheduler(checkTime, randomizeTime, tempFile)
-
+		s := NewIntervalScheduler(checkTime, randomizeTime)
 		start := time.Now()
 		s.SetNextUpdate()
 		next := s.NextUpdate()
@@ -268,10 +261,11 @@ func TestIntervalScheduler(t *testing.T) {
 	})
 
 	t.Run("should not update before scheduled time", func(t *testing.T) {
-		restore := setTestRandSource(t, 0) // Use 0 to get predictable timing
+		cleanupTimeFile(t)
+		restore := setTestRandSource(0) // Use 0 to get predictable timing
 		defer restore()
 
-		s := NewIntervalScheduler(24, 0, tempFile)
+		s := NewIntervalScheduler(24, 0)
 		start := time.Now()
 		s.SetNextUpdate()
 

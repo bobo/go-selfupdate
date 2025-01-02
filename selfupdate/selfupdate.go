@@ -55,7 +55,7 @@ type DailyScheduler struct {
 }
 
 // NewDailyScheduler creates a scheduler that runs once per day at the specified hour
-func NewDailyScheduler(hour int, timeFile string) *DailyScheduler {
+func NewDailyScheduler(hour int) *DailyScheduler {
 	return &DailyScheduler{
 		hour:     hour,
 		timeFile: timeFile,
@@ -101,7 +101,7 @@ type IntervalScheduler struct {
 }
 
 // NewIntervalScheduler creates a scheduler that runs at fixed intervals with optional randomization
-func NewIntervalScheduler(checkTime, randomizeTime int, timeFile string) *IntervalScheduler {
+func NewIntervalScheduler(checkTime, randomizeTime int) *IntervalScheduler {
 	return &IntervalScheduler{
 		checkTime:     checkTime,
 		randomizeTime: randomizeTime,
@@ -166,8 +166,8 @@ type Updater struct {
 	OnSuccessfulUpdate func()
 }
 
-// BackgroundRun starts the update check and apply cycle
-func (u *Updater) BackgroundRun() error {
+// UpdateIfNeeded starts the update check and apply cycle
+func (u *Updater) UpdateIfNeeded() error {
 	ctx := context.Background()
 	if err := os.MkdirAll(getExecRelativeDir(u.Dir), 0755); err != nil {
 		return fmt.Errorf("failed to create update directory: %w", err)
