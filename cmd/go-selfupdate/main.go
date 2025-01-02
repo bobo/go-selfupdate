@@ -67,8 +67,8 @@ func createUpdate(path string, platform string, channel string) {
 func printUsage() {
 	fmt.Println("")
 	fmt.Println("Positional arguments:")
-	fmt.Println("\tSingle platform: go-selfupdate myapp 1.2")
-	fmt.Println("\tCross platform: go-selfupdate /tmp/mybinares/ 1.2")
+	fmt.Println("\tSingle platform: go-selfupdate myapp channel 1.2")
+	fmt.Println("\tCross platform: go-selfupdate /tmp/mybinares/ channel 1.2")
 }
 
 func createBuildDir() {
@@ -98,10 +98,19 @@ func main() {
 
 	platform := *platformFlag
 	appPath := flag.Arg(0)
-	version = flag.Arg(1)
-	channel := flag.Arg(2)
+	channel := flag.Arg(1)
+	version = flag.Arg(2)
 	genDir = *outputDirFlag
 
+	if channel != "stable" {
+		genDir = filepath.Join(genDir, channel)
+	}
+
+	fmt.Println("platform", platform)
+	fmt.Println("appPath", appPath)
+	fmt.Println("channel", channel)
+	fmt.Println("version", version)
+	fmt.Println("genDir", genDir)
 	createBuildDir()
 
 	// If dir is given create update for each file
