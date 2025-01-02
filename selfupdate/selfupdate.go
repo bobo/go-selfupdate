@@ -160,7 +160,8 @@ type Updater struct {
 }
 
 // BackgroundRun starts the update check and apply cycle
-func (u *Updater) BackgroundRun(ctx context.Context) error {
+func (u *Updater) BackgroundRun() error {
+	ctx := context.Background()
 	if err := os.MkdirAll(getExecRelativeDir(u.Dir), 0755); err != nil {
 		return fmt.Errorf("failed to create update directory: %w", err)
 	}

@@ -2,7 +2,6 @@ package selfupdate
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"runtime"
 	"testing"
@@ -35,7 +34,7 @@ func TestUpdaterSchedulers(t *testing.T) {
 			updater.Scheduler = tt.scheduler
 			updater.ForceCheck = false
 			updater.Info.Sha256 = []byte("Q2vvTOW0p69A37StVANN+/ko1ZQDTElomq7fVcex/02=")
-			updater.BackgroundRun(context.Background())
+			updater.BackgroundRun()
 
 			nextUpdate := updater.NextUpdate()
 			if !nextUpdate.After(time.Now()) {
@@ -78,7 +77,7 @@ func TestUpdaterWithEmptyPayloadNoErrorNoUpdateEscapedPath(t *testing.T) {
 	updater := createUpdaterWithEscapedCharacters(mr)
 	updater.Scheduler = NewIntervalScheduler(24, 0, getExecRelativeDir("update/"+timeFile))
 
-	err := updater.BackgroundRun(context.Background())
+	err := updater.BackgroundRun()
 	if err != nil {
 		t.Errorf("Error occurred: %#v", err)
 	}

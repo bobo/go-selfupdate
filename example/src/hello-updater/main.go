@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"gitlab.com/wingbits/backend/go-libraries/go-selfupdate/selfupdate"
+	"github.com/bobo/go-selfupdate/selfupdate"
 )
 
 // The purpose of this app is to provide a simple example that just prints
