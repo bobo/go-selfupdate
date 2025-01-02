@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -282,9 +283,11 @@ func (u *Updater) fetchInfo() error {
 	urlPath = filepath.Join(urlPath, url.PathEscape(platform)) + ".json"
 
 	if u.Requester == nil {
-		return ErrNoRequester
+		u.Requester = &HTTPRequester{}
 	}
-
+	if !strings.HasSuffix(u.ApiURL, "/") {
+		u.ApiURL = u.ApiURL + "/"
+	}
 	r, err := u.Requester.Fetch(u.ApiURL + urlPath)
 	if err != nil {
 		return fmt.Errorf("failed to fetch update info: %w", err)
@@ -325,7 +328,10 @@ func (u *Updater) fetchAndVerifyFullBin(ctx context.Context) ([]byte, error) {
 		url.PathEscape(platform)) + ".gz"
 
 	if u.Requester == nil {
-		return nil, ErrNoRequester
+		u.Requester = &HTTPRequester{}
+	}
+	if !strings.HasSuffix(u.BinURL, "/") {
+		u.BinURL = u.BinURL + "/"
 	}
 	fmt.Println("fetching binary from", u.BinURL+urlPath)
 	r, err := u.Requester.Fetch(u.BinURL + urlPath)
