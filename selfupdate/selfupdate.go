@@ -38,6 +38,111 @@ type UpdateInfo struct {
 	Date    time.Time
 }
 
+// UpdateScheduler defines how update timing is handled
+type UpdateScheduler interface {
+	// ShouldUpdate returns true if an update should be performed now
+	ShouldUpdate(currentVersion string, forceCheck bool) bool
+	// SetNextUpdate schedules the next update time
+	SetNextUpdate()
+	// NextUpdate returns when the next update is scheduled
+	NextUpdate() time.Time
+}
+
+// DailyScheduler implements UpdateScheduler for updates at a specific hour
+type DailyScheduler struct {
+	hour     int
+	timeFile string
+}
+
+// NewDailyScheduler creates a scheduler that runs once per day at the specified hour
+func NewDailyScheduler(hour int, timeFile string) *DailyScheduler {
+	return &DailyScheduler{
+		hour:     hour,
+		timeFile: timeFile,
+	}
+}
+
+func (s *DailyScheduler) ShouldUpdate(currentVersion string, forceCheck bool) bool {
+	if currentVersion == "dev" {
+		slog.Info("skipping update for dev version")
+		return false
+	}
+	if forceCheck {
+		slog.Info("force update check requested")
+		return true
+	}
+	next := s.NextUpdate()
+	if next.After(time.Now()) {
+		slog.Info("next update scheduled for later",
+			"next_update", next.Format(time.RFC3339))
+		return false
+	}
+	return true
+}
+
+func (s *DailyScheduler) SetNextUpdate() {
+	now := time.Now()
+	next := time.Date(now.Year(), now.Month(), now.Day(), s.hour, 0, 0, 0, time.Local)
+	if next.Before(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	writeTime(s.timeFile, next)
+}
+
+func (s *DailyScheduler) NextUpdate() time.Time {
+	return readTime(s.timeFile)
+}
+
+// IntervalScheduler implements UpdateScheduler for updates at fixed intervals
+type IntervalScheduler struct {
+	checkTime     int
+	randomizeTime int
+	timeFile      string
+}
+
+// NewIntervalScheduler creates a scheduler that runs at fixed intervals with optional randomization
+func NewIntervalScheduler(checkTime, randomizeTime int, timeFile string) *IntervalScheduler {
+	return &IntervalScheduler{
+		checkTime:     checkTime,
+		randomizeTime: randomizeTime,
+		timeFile:      timeFile,
+	}
+}
+
+func (s *IntervalScheduler) ShouldUpdate(currentVersion string, forceCheck bool) bool {
+	if currentVersion == "dev" {
+		slog.Info("skipping update for dev version")
+		return false
+	}
+	if forceCheck {
+		slog.Info("force update check requested")
+		return true
+	}
+	next := s.NextUpdate()
+	if next.After(time.Now()) {
+		slog.Info("next update scheduled for later",
+			"next_update", next.Format(time.RFC3339))
+		return false
+	}
+	return true
+}
+
+func (s *IntervalScheduler) SetNextUpdate() {
+	next := time.Now().Add(time.Duration(s.checkTime) * time.Hour)
+	if s.randomizeTime > 0 {
+		next = next.Add(time.Duration(randInt(0, s.randomizeTime)) * time.Hour)
+	}
+	writeTime(s.timeFile, next)
+}
+
+func (s *IntervalScheduler) NextUpdate() time.Time {
+	return readTime(s.timeFile)
+}
+
+func randInt(min, max int) int {
+	return min + time.Now().Nanosecond()%(max-min+1)
+}
+
 // Updater handles the self-update process
 type Updater struct {
 	CurrentVersion     string
@@ -47,11 +152,9 @@ type Updater struct {
 	DiffURL            string
 	Dir                string
 	ForceCheck         bool
-	CheckTime          int // Hours between update checks
-	RandomizeTime      int // Random hours to add to CheckTime
+	Scheduler          UpdateScheduler
 	Requester          Requester
 	Channel            string
-	ScheduledHour      *int // Hour to perform updates (0-23)
 	Info               UpdateInfo
 	OnSuccessfulUpdate func()
 }
@@ -62,7 +165,7 @@ func (u *Updater) BackgroundRun(ctx context.Context) error {
 		return fmt.Errorf("failed to create update directory: %w", err)
 	}
 
-	if !u.shouldUpdate() {
+	if !u.Scheduler.ShouldUpdate(u.CurrentVersion, u.ForceCheck) {
 		return nil
 	}
 
@@ -70,34 +173,13 @@ func (u *Updater) BackgroundRun(ctx context.Context) error {
 		return fmt.Errorf("update not possible: %w", err)
 	}
 
-	u.setNextUpdateTime()
+	u.Scheduler.SetNextUpdate()
 
 	if err := u.Update(ctx); err != nil {
 		return fmt.Errorf("update failed: %w", err)
 	}
 
 	return nil
-}
-
-func (u *Updater) shouldUpdate() bool {
-	if u.CurrentVersion == "dev" {
-		slog.Info("skipping update for dev version")
-		return false
-	}
-
-	if u.ForceCheck {
-		slog.Info("force update check requested")
-		return true
-	}
-
-	nextUpdate := u.NextUpdate()
-	if nextUpdate.After(time.Now()) {
-		slog.Info("next update scheduled for later",
-			"next_update", nextUpdate.Format(time.RFC3339))
-		return false
-	}
-
-	return true
 }
 
 // Update performs the self-update process
@@ -111,7 +193,7 @@ func (u *Updater) Update(ctx context.Context) error {
 		execPath = resolvedPath
 	}
 
-	if err := u.fetchInfo(ctx); err != nil {
+	if err := u.fetchInfo(); err != nil {
 		return fmt.Errorf("failed to fetch update info: %w", err)
 	}
 
@@ -174,25 +256,11 @@ func (u *Updater) applyUpdate(execPath string, newBin []byte) error {
 
 // Helper functions
 
-func (u *Updater) setNextUpdateTime() {
-	if u.ScheduledHour != nil {
-		next := u.calculateScheduledTime()
-		writeTime(getExecRelativeDir(u.Dir+timeFile), next)
-		return
-	}
-
-	if u.CheckTime > 0 {
-		next := time.Now().Add(time.Duration(u.CheckTime) * time.Hour)
-		writeTime(getExecRelativeDir(u.Dir+timeFile), next)
-	}
-}
-
 func (u *Updater) NextUpdate() time.Time {
-	path := getExecRelativeDir(u.Dir + timeFile)
-	return readTime(path)
+	return u.Scheduler.NextUpdate()
 }
 
-func (u *Updater) fetchInfo(ctx context.Context) error {
+func (u *Updater) fetchInfo() error {
 	channel := u.Channel
 	if channel == "" {
 		channel = stableChannel
@@ -251,7 +319,7 @@ func (u *Updater) fetchAndVerifyFullBin(ctx context.Context) ([]byte, error) {
 	if u.Requester == nil {
 		return nil, ErrNoRequester
 	}
-
+	fmt.Println("fetching binary from", u.BinURL+urlPath)
 	r, err := u.Requester.Fetch(u.BinURL + urlPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch binary: %w", err)
@@ -276,14 +344,4 @@ func (u *Updater) fetchAndVerifyFullBin(ctx context.Context) ([]byte, error) {
 	}
 
 	return bin, nil
-}
-
-func (u *Updater) calculateScheduledTime() time.Time {
-	now := time.Now()
-	next := time.Date(now.Year(), now.Month(), now.Day(), *u.ScheduledHour, 0, 0, 0, time.Local)
-
-	if next.Before(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	return next
 }
