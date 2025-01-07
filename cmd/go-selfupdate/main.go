@@ -82,7 +82,6 @@ func createBuildDir() {
 }
 
 func main() {
-	outputDirFlag := flag.String("o", "public", "Output directory for writing updates")
 
 	var defaultPlatform string
 	goos := os.Getenv("GOOS")
@@ -106,10 +105,10 @@ func main() {
 	appPath := flag.Arg(0)
 	version = flag.Arg(1)
 	channel := flag.Arg(2)
-	genDir = *outputDirFlag
+	genDir = "public"
 
 	if channel != "stable" {
-		genDir = filepath.Join(*outputDirFlag, channel)
+		genDir = filepath.Join(genDir, channel)
 	}
 
 	fmt.Println("platform", platform)
