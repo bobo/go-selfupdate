@@ -41,12 +41,18 @@ func createUpdate(path string, platform string, channel string) {
 	if err != nil {
 		fmt.Println("error:", err)
 	}
-	err = os.WriteFile(filepath.Join(genDir, platform+".json"), b, 0755)
+
+	// For JSON files, use genDir which is already set correctly for the channel
+	jsonPath := filepath.Join(genDir, platform+".json")
+	fmt.Println("creating", jsonPath)
+	err = os.WriteFile(jsonPath, b, 0755)
 	if err != nil {
 		panic(err)
 	}
 
-	os.MkdirAll(filepath.Join(genDir, version), 0755)
+	// For GZ files, always use public/version regardless of channel
+	gzDir := filepath.Join("public", version)
+	os.MkdirAll(gzDir, 0755)
 
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)
@@ -56,7 +62,7 @@ func createUpdate(path string, platform string, channel string) {
 	}
 	w.Write(f)
 	w.Close() // You must close this first to flush the bytes to the buffer.
-	err = os.WriteFile(filepath.Join(genDir, version, platform+".gz"), buf.Bytes(), 0755)
+	err = os.WriteFile(filepath.Join(gzDir, platform+".gz"), buf.Bytes(), 0755)
 
 	if err != nil {
 		panic(err)
@@ -67,8 +73,8 @@ func createUpdate(path string, platform string, channel string) {
 func printUsage() {
 	fmt.Println("")
 	fmt.Println("Positional arguments:")
-	fmt.Println("\tSingle platform: go-selfupdate myapp channel 1.2")
-	fmt.Println("\tCross platform: go-selfupdate /tmp/mybinares/ channel 1.2")
+	fmt.Println("\tSingle platform: go-selfupdate myapp version channel")
+	fmt.Println("\tCross platform: go-selfupdate /tmp/mybinares/ version channel")
 }
 
 func createBuildDir() {
@@ -76,7 +82,6 @@ func createBuildDir() {
 }
 
 func main() {
-	outputDirFlag := flag.String("o", "public", "Output directory for writing updates")
 
 	var defaultPlatform string
 	goos := os.Getenv("GOOS")
@@ -98,9 +103,9 @@ func main() {
 
 	platform := *platformFlag
 	appPath := flag.Arg(0)
-	channel := flag.Arg(1)
-	version = flag.Arg(2)
-	genDir = *outputDirFlag
+	version = flag.Arg(1)
+	channel := flag.Arg(2)
+	genDir = "public"
 
 	if channel != "stable" {
 		genDir = filepath.Join(genDir, channel)
