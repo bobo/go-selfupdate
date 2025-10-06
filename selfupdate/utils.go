@@ -6,29 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 )
-
-// readTime reads and parses a timestamp from a file
-func readTime(path string) time.Time {
-	p, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return time.Time{}
-	}
-	if err != nil {
-		return time.Now().Add(1000 * time.Hour)
-	}
-	t, err := time.Parse(time.RFC3339, string(p))
-	if err != nil {
-		return time.Now().Add(1000 * time.Hour)
-	}
-	return t
-}
-
-// writeTime writes a timestamp to a file
-func writeTime(path string, t time.Time) bool {
-	return os.WriteFile(path, []byte(t.Format(time.RFC3339)), 0644) == nil
-}
 
 // verifyHash checks if a binary matches the expected SHA256 hash
 func verifyHash(bin []byte, expectedHash []byte) bool {

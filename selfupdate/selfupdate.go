@@ -19,23 +19,19 @@ import (
 
 // Common errors
 var (
-	ErrHashMismatch    = errors.New("new file hash mismatch after patch")
-	ErrInvalidHash     = errors.New("invalid hash in update info")
-	ErrChannelMismatch = errors.New("update channel mismatch")
-	ErrNoRequester     = errors.New("no HTTP requester configured")
+	ErrHashMismatch = errors.New("new file hash mismatch after patch")
+	ErrInvalidHash  = errors.New("invalid hash in update info")
+	ErrNoRequester  = errors.New("no HTTP requester configured")
 )
 
 const (
-	timeFile      = "cktime"                            // path to timestamp file relative to u.Dir
-	platform      = runtime.GOOS + "-" + runtime.GOARCH // ex: linux-amd64
-	stableChannel = "stable"
+	platform = runtime.GOOS + "-" + runtime.GOARCH // ex: linux-amd64
 )
 
 // UpdateInfo contains metadata about an available update
 type UpdateInfo struct {
 	Version string
 	Sha256  []byte
-	Channel string
 	Date    time.Time
 }
 
@@ -49,56 +45,11 @@ type UpdateScheduler interface {
 	NextUpdate() time.Time
 }
 
-// DailyScheduler implements UpdateScheduler for updates at a specific hour
-type DailyScheduler struct {
-	hour     int
-	timeFile string
-}
-
-// NewDailyScheduler creates a scheduler that runs once per day at the specified hour
-func NewDailyScheduler(hour int) *DailyScheduler {
-	return &DailyScheduler{
-		hour:     hour,
-		timeFile: timeFile,
-	}
-}
-
-func (s *DailyScheduler) ShouldUpdate(currentVersion string, forceCheck bool) bool {
-	if currentVersion == "dev" {
-		slog.Info("skipping update for dev version")
-		return false
-	}
-	if forceCheck {
-		slog.Info("force update check requested")
-		return true
-	}
-	next := s.NextUpdate()
-	if next.After(time.Now()) {
-		slog.Info("next update scheduled for later",
-			"next_update", next.Format(time.RFC3339))
-		return false
-	}
-	return true
-}
-
-func (s *DailyScheduler) SetNextUpdate() {
-	now := time.Now()
-	next := time.Date(now.Year(), now.Month(), now.Day(), s.hour, 0, 0, 0, time.Local)
-	if next.Before(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	writeTime(s.timeFile, next)
-}
-
-func (s *DailyScheduler) NextUpdate() time.Time {
-	return readTime(s.timeFile)
-}
-
 // IntervalScheduler implements UpdateScheduler for updates at fixed intervals
 type IntervalScheduler struct {
 	checkTime     int
 	randomizeTime int
-	timeFile      string
+	nextUpdate    time.Time
 }
 
 // NewIntervalScheduler creates a scheduler that runs at fixed intervals with optional randomization
@@ -106,7 +57,6 @@ func NewIntervalScheduler(checkTime, randomizeTime int) *IntervalScheduler {
 	return &IntervalScheduler{
 		checkTime:     checkTime,
 		randomizeTime: randomizeTime,
-		timeFile:      timeFile,
 	}
 }
 
@@ -133,11 +83,11 @@ func (s *IntervalScheduler) SetNextUpdate() {
 	if s.randomizeTime > 0 {
 		next = next.Add(time.Duration(randInt(0, s.randomizeTime)) * time.Hour)
 	}
-	writeTime(s.timeFile, next)
+	s.nextUpdate = next
 }
 
 func (s *IntervalScheduler) NextUpdate() time.Time {
-	return readTime(s.timeFile)
+	return s.nextUpdate
 }
 
 var randSource = func() int64 {
@@ -162,7 +112,6 @@ type Updater struct {
 	ForceCheck         bool
 	Scheduler          UpdateScheduler
 	Requester          Requester
-	Channel            string
 	Info               UpdateInfo
 	OnSuccessfulUpdate func()
 }
@@ -270,17 +219,8 @@ func (u *Updater) NextUpdate() time.Time {
 }
 
 func (u *Updater) fetchInfo() error {
-	channel := u.Channel
-	if channel == "" {
-		channel = stableChannel
-	}
-
-	// Build URL path
-	urlPath := url.PathEscape(u.CmdName)
-	if channel != stableChannel {
-		urlPath = filepath.Join(urlPath, url.PathEscape(channel))
-	}
-	urlPath = filepath.Join(urlPath, url.PathEscape(platform)) + ".json"
+	// Build URL path: myapp/darwin-arm64.json
+	urlPath := filepath.Join(url.PathEscape(u.CmdName), url.PathEscape(platform)) + ".json"
 
 	if u.Requester == nil {
 		u.Requester = &HTTPRequester{}
@@ -303,27 +243,14 @@ func (u *Updater) fetchInfo() error {
 		return ErrInvalidHash
 	}
 
-	if info.Channel != channel {
-		return fmt.Errorf("%w: expected %s, got %s",
-			ErrChannelMismatch, channel, info.Channel)
-	}
-
 	u.Info = info
 	return nil
 }
 
 func (u *Updater) fetchAndVerifyFullBin(ctx context.Context) ([]byte, error) {
-	channel := u.Channel
-	if channel == "" {
-		channel = stableChannel
-	}
-
-	// Build URL path
-	urlPath := url.PathEscape(u.CmdName)
-	if channel != stableChannel {
-		urlPath = filepath.Join(urlPath, url.PathEscape(channel))
-	}
-	urlPath = filepath.Join(urlPath,
+	// Build URL path: myapp/1.2.3/darwin-arm64.gz
+	urlPath := filepath.Join(
+		url.PathEscape(u.CmdName),
 		url.PathEscape(u.Info.Version),
 		url.PathEscape(platform)) + ".gz"
 

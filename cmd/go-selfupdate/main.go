@@ -18,7 +18,6 @@ var version, genDir string
 type current struct {
 	Version string
 	Sha256  []byte
-	Channel string
 	Date    time.Time
 }
 
@@ -34,15 +33,15 @@ func generateSha256(path string) []byte {
 	//return base64.URLEncoding.EncodeToString(sum)
 }
 
-func createUpdate(path string, platform string, channel string) {
-	c := current{Version: version, Sha256: generateSha256(path), Channel: channel, Date: time.Now()}
+func createUpdate(path string, platform string) {
+	c := current{Version: version, Sha256: generateSha256(path), Date: time.Now()}
 
 	b, err := json.MarshalIndent(c, "", "    ")
 	if err != nil {
 		fmt.Println("error:", err)
 	}
 
-	// For JSON files, use genDir which is already set correctly for the channel
+	// Create JSON file
 	jsonPath := filepath.Join(genDir, platform+".json")
 	fmt.Println("creating", jsonPath)
 	err = os.WriteFile(jsonPath, b, 0755)
@@ -50,7 +49,7 @@ func createUpdate(path string, platform string, channel string) {
 		panic(err)
 	}
 
-	// For GZ files, always use public/version regardless of channel
+	// Create GZ file in public/version
 	gzDir := filepath.Join("public", version)
 	os.MkdirAll(gzDir, 0755)
 
@@ -73,8 +72,8 @@ func createUpdate(path string, platform string, channel string) {
 func printUsage() {
 	fmt.Println("")
 	fmt.Println("Positional arguments:")
-	fmt.Println("\tSingle platform: go-selfupdate myapp version channel")
-	fmt.Println("\tCross platform: go-selfupdate /tmp/mybinares/ version channel")
+	fmt.Println("\tSingle platform: go-selfupdate myapp version")
+	fmt.Println("\tCross platform: go-selfupdate /tmp/mybinares/ version")
 }
 
 func createBuildDir() {
@@ -104,16 +103,10 @@ func main() {
 	platform := *platformFlag
 	appPath := flag.Arg(0)
 	version = flag.Arg(1)
-	channel := flag.Arg(2)
 	genDir = "public"
-
-	if channel != "stable" {
-		genDir = filepath.Join(genDir, channel)
-	}
 
 	fmt.Println("platform", platform)
 	fmt.Println("appPath", appPath)
-	fmt.Println("channel", channel)
 	fmt.Println("version", version)
 	fmt.Println("genDir", genDir)
 	createBuildDir()
@@ -128,11 +121,11 @@ func main() {
 		files, err := os.ReadDir(appPath)
 		if err == nil {
 			for _, file := range files {
-				createUpdate(filepath.Join(appPath, file.Name()), file.Name(), channel)
+				createUpdate(filepath.Join(appPath, file.Name()), file.Name())
 			}
 			os.Exit(0)
 		}
 	}
 
-	createUpdate(appPath, platform, channel)
+	createUpdate(appPath, platform)
 }
